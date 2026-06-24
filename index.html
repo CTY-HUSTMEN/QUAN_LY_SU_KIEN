@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>HUST MEN - QUẢN LÝ HÀNG SỰ KIỆN</title>
+    <title>HUST MEN - Admin Panel Quản Lý Kho</title>
 
     <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 
@@ -160,7 +160,7 @@
         }
 
         // ==========================================
-        // 2. TAB 1: KHO & MÃ VẠCH (TÍCH HỢP IN MÃ)
+        // 2. TAB 1: KHO & MÃ VẠCH
         // ==========================================
         function updateCounterDropdown() {
             const select = document.getElementById("stockCounter");
@@ -218,20 +218,18 @@
                     actionHtml = `<span style="color:#999; font-size:12px; font-style:italic;">(Tự trừ gốc)</span>`;
                 }
 
-                // CỘT 1: CHỈNH SỬA MÃ BẰNG TEXT
-                // CỘT 2: HIỂN THỊ HÌNH ẢNH MÃ VẠCH + NÚT IN
                 html += `
                     <tr>
                         <td>
-                            <div style="display:flex; gap:5px; align-items:center;">
-                                <input type="text" id="bc-edit-${code}" class="form-control" style="padding: 6px 8px; font-weight:bold; font-size:14px; border:1px solid #ff9800; color:#e65100; width: 110px; text-align:center;" value="${code}">
+                            <div class="flex-group keep-row" style="align-items:center;">
+                                <input type="text" id="bc-edit-${code}" class="form-control" style="padding: 6px 8px; font-weight:bold; font-size:14px; border:1px solid #ff9800; color:#e65100; min-width: 100px; text-align:center;" value="${code}">
                                 <button class="btn-sm btn-sm-success" title="Lưu thay đổi mã vạch" onclick="renameBarcode('${code}')">💾</button>
                             </div>
                         </td>
                         <td style="text-align:center; padding: 10px;">
                             <svg id="svg-bc-${code}" class="mini-barcode"></svg>
                             <br>
-                            <button class="btn-sm btn-sm-outline" style="margin-top:2px;" onclick="printSingleBarcode('${code}')">In Mã Barcode</button>
+                            <button class="btn-sm btn-sm-outline" style="margin-top:5px;" onclick="printSingleBarcode('${code}')">In Mã</button>
                         </td>
                         <td>
                             <b style="font-size:14px;">${data.name}</b> <br>
@@ -253,7 +251,6 @@
             if (!html) html = '<tr><td colspan="6" style="text-align:center; padding: 20px;">Chưa có dữ liệu. Hãy tạo mặt hàng mới!</td></tr>';
             tbody.innerHTML = html;
 
-            // RENDER HÌNH ẢNH MÃ VẠCH VÀO BẢNG
             sortedCodes.forEach(code => {
                 try {
                     const svgElem = document.getElementById(`svg-bc-${code}`);
@@ -273,7 +270,6 @@
             });
         }
 
-        // HÀM IN MỘT MÃ VẠCH ĐỘC LẬP
         window.printSingleBarcode = function(code) {
             try {
                 JsBarcode("#printSvg", code, {
@@ -285,7 +281,7 @@
                     fontSize: 20,
                     margin: 10
                 });
-                window.print(); // Gọi lệnh in của trình duyệt
+                window.print();
             } catch (e) {
                 showToast("Mã vạch chứa ký tự không được hỗ trợ chuẩn CODE128", "error");
             }
@@ -491,9 +487,9 @@
 
             CURRENT_COUNTERS.forEach(c => {
                 list.innerHTML += `
-                    <div class="barcode-item" style="display: flex; justify-content: space-between; align-items: center;">
+                    <div class="barcode-item" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
                         <b style="font-size: 16px; color: #e65100;">Quầy ${c}</b>
-                        <div style="display: flex; gap: 5px;">
+                        <div class="flex-group keep-row" style="margin:0;">
                             <button class="btn-sm btn-sm-warning" onclick="renameCounter('${c}')">✏️ Đổi Tên</button>
                             <button class="btn-sm btn-sm-danger" onclick="deleteCounter('${c}')">🗑️ Xóa</button>
                         </div>
@@ -588,18 +584,25 @@
         .header h2 { margin-bottom: 5px; font-weight: 900; letter-spacing: 1px; }
         .header p { font-size: 14px; opacity: 0.9; }
         
-        .tabs { display: flex; background: #fff8eb; border-bottom: 2px solid #ffe0b2; overflow-x: auto; white-space: nowrap;}
+        .tabs { display: flex; background: #fff8eb; border-bottom: 2px solid #ffe0b2; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch;}
         .tab-btn { flex: 1; padding: 15px 10px; border: none; background: none; cursor: pointer; font-weight: bold; font-size: 14px; color: #777; transition: 0.3s; }
         .tab-btn.active { color: #e65100; border-bottom: 3px solid #ff9800; background: #fff; }
         .tab-content { display: none; padding: 25px; }
         .tab-content.active { display: block; animation: fadeIn 0.4s; }
         
-        .form-group { margin-bottom: 15px; }
+        .form-group { margin-bottom: 15px; width: 100%;}
         .form-group label { display: block; font-size: 13px; font-weight: bold; color: #555; margin-bottom: 5px; text-transform: uppercase; }
         .form-control { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; outline: none; transition: border 0.3s; }
         .form-control:focus { border-color: #ff9800; }
         .form-control:disabled { background-color: #e9ecef; color: #666; cursor: not-allowed; }
         
+        /* Thay thế style flex inline bằng class dùng chung */
+        .flex-group { display: flex; gap: 10px; width: 100%; }
+        .flex-group > * { flex: 1; }
+        .flex-group.keep-row { flex-direction: row; }
+        .flex-group.keep-row > input { flex: 1; }
+        .flex-group.keep-row > button { flex: 0 0 auto; }
+
         .combo-box { background: #fff3e0; padding: 15px; border-radius: 8px; border: 1px dashed #ff9800; margin-bottom: 15px; }
         .combo-box-title { font-size: 12px; font-weight: bold; color: #e65100; margin-bottom: 10px; display: block; text-transform: uppercase;}
         
@@ -611,8 +614,8 @@
         .btn-outline { background: #eee; color: #333; border: 1px solid #ddd; } .btn-outline:hover { background: #ddd; }
         .btn:active { transform: scale(0.97); }
         
-        .table-container { overflow-x: auto; border-radius: 8px; border: 1px solid #ddd; max-height: 550px; overflow-y: auto;}
-        .table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }
+        .table-container { overflow-x: auto; border-radius: 8px; border: 1px solid #ddd; max-height: 600px; overflow-y: auto; -webkit-overflow-scrolling: touch;}
+        .table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; min-width: 700px;}
         .table th, .table td { padding: 12px 10px; border-bottom: 1px solid #eee; vertical-align: middle; }
         .table th { background: #fdfdfd; color: #555; text-transform: uppercase; font-size: 12px; position: sticky; top: 0; z-index: 1; border-bottom: 2px solid #ddd;}
         .table tr:hover { background: #fff8eb; }
@@ -622,11 +625,11 @@
         .badge-warning { background: #fff8e1; color: #f57f17; border: 1px solid #ffecb3; }
         .badge-danger { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
 
-        .action-cell { display: flex; gap: 5px; justify-content: center; }
-        .inline-input { width: 60px; padding: 8px 5px; border: 1px solid #ccc; border-radius: 6px; font-weight: bold; text-align: center; outline: none; transition: 0.2s;}
+        .action-cell { display: flex; gap: 5px; justify-content: center; align-items: center;}
+        .inline-input { width: 60px; padding: 10px 5px; border: 1px solid #ccc; border-radius: 6px; font-weight: bold; text-align: center; outline: none; transition: 0.2s;}
         .inline-input:focus { border-color: #ff9800; box-shadow: 0 0 5px rgba(255,152,0,0.3); }
         
-        .btn-sm { padding: 8px 10px; font-size: 12px; border: none; border-radius: 6px; cursor: pointer; color: white; font-weight: bold; transition: 0.2s; white-space: nowrap;}
+        .btn-sm { padding: 10px 12px; font-size: 13px; border: none; border-radius: 6px; cursor: pointer; color: white; font-weight: bold; transition: 0.2s; white-space: nowrap;}
         .btn-sm-primary { background: #2196F3; } .btn-sm-primary:hover { background: #1976D2; }
         .btn-sm-success { background: #4CAF50; } .btn-sm-success:hover { background: #388E3C; }
         .btn-sm-warning { background: #ff9800; } .btn-sm-warning:hover { background: #f57c00; }
@@ -648,15 +651,36 @@
         @media print {
             body * { visibility: hidden; }
             #printArea, #printArea * { visibility: visible; }
-            #printArea { 
-                position: absolute; 
-                left: 50%; 
-                top: 50%; 
-                transform: translate(-50%, -50%); 
-                display: flex !important; 
-                justify-content: center; 
-                align-items: center; 
-            }
+            #printArea { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex !important; justify-content: center; align-items: center; }
+        }
+
+        /* ==========================================
+           TỐI ƯU GIAO DIỆN DI ĐỘNG (MOBILE RESPONSIVE)
+           ========================================== */
+        @media (max-width: 768px) {
+            body { padding: 0; background: #fff; }
+            .container { border-radius: 0; box-shadow: none; border: none; }
+            .header { padding: 15px 10px; }
+            .header h2 { font-size: 20px; }
+            .tab-content { padding: 15px 10px; }
+            
+            /* Tự động ngắt dòng các flexbox trên mobile */
+            .flex-group:not(.keep-row) { flex-direction: column; gap: 12px; margin-bottom: 15px !important;}
+            .flex-group:not(.keep-row) > .form-group { margin-bottom: 0; }
+            
+            /* Bảng cuộn mượt hơn, font nhỏ lại một chút để hiển thị nhiều thông tin */
+            .table th, .table td { padding: 12px 8px; font-size: 13px; }
+            .mini-barcode { max-width: 120px; }
+            
+            /* Tăng kích thước các nút thao tác để dễ bấm bằng ngón tay */
+            .btn, .btn-sm { padding: 14px; font-size: 14px; }
+            .inline-input { padding: 12px 5px; width: 55px; }
+            .action-cell { gap: 8px; }
+
+            /* Nút lưu mã vạch inline */
+            #bc-edit-code { min-width: 80px; }
+            
+            #toast { width: 90%; font-size: 14px; }
         }
     </style>
 </head>
@@ -675,11 +699,11 @@
         </div>
 
         <div id="tab-stock" class="tab-content active">
-            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+            <div class="flex-group keep-row" style="margin-bottom: 15px;">
                 <select id="stockCounter" class="form-control" style="margin-bottom:0;" onchange="onCounterChange()">
                     <option value="">-- Đang tải Quầy từ Firebase... --</option>
                 </select>
-                <button class="btn btn-primary" onclick="reloadBarcodes()" style="flex: 0 0 50px;" title="Tải lại bảng">🔄</button>
+                <button class="btn btn-primary" onclick="reloadBarcodes()" title="Tải lại bảng">🔄</button>
             </div>
 
             <div class="table-container">
@@ -742,19 +766,19 @@
             <div class="combo-box">
                 <span class="combo-box-title" style="font-size: 16px;">TẠO MÃ VẠCH XUẤT GÓI COMBO</span>
                 
-                <div style="display: flex; gap: 10px;">
-                    <div class="form-group" style="flex: 1;">
+                <div class="flex-group">
+                    <div class="form-group">
                         <label>Mã Vạch Combo (In trên hộp)</label>
                         <input type="text" id="cbCode" class="form-control" placeholder="VD: CB-TET-2027">
                     </div>
-                    <div class="form-group" style="flex: 2;">
+                    <div class="form-group">
                         <label>Tên Hiển Thị (Khi quét)</label>
                         <input type="text" id="cbName" class="form-control" placeholder="VD: Combo ... (Giày + 2 Cà Phê)">
                     </div>
                 </div>
 
-                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                    <div class="form-group" style="flex: 1.5; margin-bottom: 0;">
+                <div class="flex-group" style="margin-bottom: 10px;">
+                    <div class="form-group">
                         <label>Chuẩn Combo</label>
                         <select id="bcComboType" class="form-control" onchange="handleComboTypeChange()">
                             <option value="COMBO_1">Combo 1 (Tủ Lạnh)</option>
@@ -762,7 +786,7 @@
                             <option value="CUSTOM">Tùy chỉnh</option>
                         </select>
                     </div>
-                    <div class="form-group" style="flex: 2; margin-bottom: 0;">
+                    <div class="form-group">
                         <label>Sản Phẩm Gốc</label>
                         <select id="bcComboBase" class="form-control" disabled onchange="handleComboBaseChange()">
                             <option value="HUT_MUI_TU_LANH">Hút mùi tủ lạnh</option>
@@ -770,18 +794,18 @@
                             <option value="TUI_HUT_AM">Túi hút ẩm</option>
                         </select>
                     </div>
-                    <div class="form-group" id="comboBaseVariantGroup" style="display: none; flex: 1.5; margin-bottom: 0;">
+                    <div class="form-group" id="comboBaseVariantGroup" style="display: none;">
                         <label>Size / Loại Gốc</label>
                         <select id="bcComboBaseVariant" class="form-control"></select>
                     </div>
                 </div>
 
-                <div style="display: flex; gap: 10px;">
-                    <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                <div class="flex-group">
+                    <div class="form-group">
                         <label>Túi Hương 1</label>
                         <select id="bcComboH1" class="form-control"></select>
                     </div>
-                    <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                    <div class="form-group">
                         <label>Túi Hương 2</label>
                         <select id="bcComboH2" class="form-control"></select>
                     </div>
@@ -795,9 +819,9 @@
             
             <div style="background: #ffebee; padding: 15px; border-radius: 8px; border: 1px dashed #f44336; margin-bottom: 20px;">
                 <h3 style="color:#c62828; margin-bottom: 12px; font-size: 18px; text-align: center;">RESET HỆ THỐNG</h3>
-                <div style="display: flex; gap: 10px;">
-                    <button class="btn btn-warning" onclick="resetAllCountersStats()" style="flex:1;">RESET BÁN/TẶNG VỀ 0</button>
-                    <button class="btn btn-danger" onclick="clearAllLogs()" style="flex:1;">XÓA SẠCH LỊCH SỬ LOGS</button>
+                <div class="flex-group">
+                    <button class="btn btn-warning" onclick="resetAllCountersStats()">RESET BÁN/TẶNG VỀ 0</button>
+                    <button class="btn btn-danger" onclick="clearAllLogs()">XÓA SẠCH LỊCH SỬ LOGS</button>
                 </div>
                 <p style="font-size:12px; color:#c62828; margin-top:10px;"><i>* Sử dụng khi bắt đầu sự kiện/đợt bán hàng mới. Xóa Logs sẽ làm trống dữ liệu đẩy về Google Sheet (Chỉ giữ lại tồn kho hiện tại).</i></p>
             </div>
@@ -805,9 +829,9 @@
             <div style="background: #fafafa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 15px;">
                 <div class="form-group" style="margin-bottom:0;">
                     <label>THÊM QUẦY KHO MỚI</label>
-                    <div style="display: flex; gap: 10px;">
+                    <div class="flex-group keep-row">
                         <input type="text" id="newCounterName" class="form-control" placeholder="Nhập tên quầy">
-                        <button class="btn btn-primary" onclick="addCounter()" style="flex: 0 0 120px; padding: 0;">➕ THÊM</button>
+                        <button class="btn btn-primary" onclick="addCounter()">➕ THÊM</button>
                     </div>
                 </div>
             </div>
