@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>HUST MEN - Admin Panel Quản Lý Kho</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getDatabase, ref, get, set, update, push, runTransaction, onValue } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBtdk8zuVGkueYcRurRIAWIm_AlTrrGg9Y",
+            authDomain: "su-kien-fe294.firebaseapp.com",
+            databaseURL: "https://su-kien-fe294-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "su-kien-fe294",
+            storageBucket: "su-kien-fe294.firebasestorage.app",
+            messagingSenderId: "863152941656",
+            appId: "1:863152941656:web:f4adea7c33d941a9d8b82d"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        let BARCODE_MAP = {};
+        let PRODUCTS_MAP = {};
+        let CURRENT_COUNTERS = [];
+
+        document.addEventListener("DOMContentLoaded", () => {
+            loadData();
+            
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                    
+                    e.target.classList.add('active');
+                    document.getElementById(e.target.dataset.tab).classList.add('active');
+                });
+            });
+
+            // Logic điền tự động form Mặt Hàng
+            document.getElementById("newProdId").addEventListener("input", (e) => {
+                const id = e.target.value.trim().toUpperCase();
+                const existName = getFriendlyName(id);
+                
+                if (existName !== id || ['TUI_HUT_AM', 'TUI_TOA_HUONG', 'HUT_MUI_TU_LANH', 'TUI_HUT_MUI_GIAY'].includes(id)) {
+                    document.getElementById("newProdName").value = existName;
+                    document.getElementById("newProdName").disabled = true;
+                    document.getElementById("newProdType").value = "variant";
+                    document.getElementById("newProdType").disabled = true;
+                    document.getElementById("newProdVariantGroup").style.display = "block";
+                    document.getElementById("addProdNotice").innerHTML = "<i>* Hệ thống phát hiện đây là mặt hàng CŨ. Các phân loại bạn nhập dưới đây sẽ được THÊM VÀO.</i>";
+                    document.getElementById("addProdNotice").style.color = "#e65100";
+                } else {
+                    document.getElementById("newProdName").disabled = false;
+                    document.getElementById("newProdType").disabled = false;
+                    document.getElementById("addProdNotice").innerHTML = "<i>* Sau khi thêm, hệ thống sẽ tự động tạo mã vạch và ô nhập tồn kho.</i>";
+                    document.getElementById("addProdNotice").style.color = "#777";
+                }
+            });
+        });
+
+        // ==========================================
+        // 1. KHỞI TẠO VÀ LẮNG NGHE DỮ LIỆU
+        // ==========================================
+        function loadData() {
+            Promise.all([
+                get(ref(db, "barcodes")),
+                get(ref(db, "products"))
+            ]).then(([bSnap, pSnap]) => {
+                BARCODE_MAP = bSnap.val() || {};
+                PRODUCTS_MAP = pSnap.val() || {};
+                
+                updateIdSuggestions();
+                renderMergedTable(); 
+
+                onValue(ref(db, "kho"), (snap) => {
+                    const khoData = snap.val() || {};
+                    CURRENT_COUNTERS = Object.keys(khoData);
+                    
+                    updateCounterDropdown();
+                    renderCounterList();
+                    updateDynamicDropdowns(khoData);
+
+                    const selectedCounter = document.getElementById("stockCounter").value;
+                    if (selectedCounter) {
+                        updateAllStocks(khoData[selectedCounter] || {});
+                    } else {
+                        updateAllStocks(null);
+                    }
+                });
+            }).catch(err => {
+                showToast("Lỗi kết nối khi tải cấu hình: " + err.message, "error");
+            });
+        }
+
+        window.reloadBarcodes = function() {
+            get(ref(db, "barcodes")).then(snap => {
+                BARCODE_MAP = snap.val() || {};
+                renderMergedTable();
+                
+                const selectedCounter = document.getElementById("stockCounter").value;
+                if (selectedCounter) {
+                    get(ref(db, `kho/${selectedCounter}`)).then(kSnap => {
+                        updateAllStocks(kSnap.val() || {});
+                    });
+                }
+            });
+        }
+
+        function updateDynamicDropdowns(khoData) {
+            let huongSet = new Set(["Buoi", "Nhai", "Que", "Ca_phe", "Hoa_hong", "Oai_huong"]); 
+            let amSet = new Set(["1_5g", "2g", "5g", "250g", "500g"]); 
+
+            for (let c in khoData) {
+                if (khoData[c]["TUI_TOA_HUONG"]) {
+                    Object.keys(khoData[c]["TUI_TOA_HUONG"]).forEach(v => {
+                        if(typeof khoData[c]["TUI_TOA_HUONG"][v] === 'object') huongSet.add(v);
+                    });
+                }
+                if (khoData[c]["TUI_HUT_AM"]) {
+                    Object.keys(khoData[c]["TUI_HUT_AM"]).forEach(v => {
+                        if(typeof khoData[c]["TUI_HUT_AM"][v] === 'object') amSet.add(v);
+                    });
+                }
+            }
+
+            let hHtml = ''; huongSet.forEach(v => hHtml += `<option value="${v}">${v.replace(/_/g, ' ')}</option>`);
+            const h1Elem = document.getElementById("bcComboH1"); if(h1Elem) h1Elem.innerHTML = hHtml;
+            const h2Elem = document.getElementById("bcComboH2"); if(h2Elem) h2Elem.innerHTML = hHtml;
+
+            let aHtml = ''; amSet.forEach(v => aHtml += `<option value="${v}">${v}</option>`);
+            const baseVarElem = document.getElementById("bcComboBaseVariant"); if(baseVarElem) baseVarElem.innerHTML = aHtml;
+
+            let vHtml = '';
+            huongSet.forEach(v => vHtml += `<option value="${v}">`);
+            amSet.forEach(v => vHtml += `<option value="${v}">`);
+            const varSugElem = document.getElementById("variantSuggestions");
+            if(varSugElem) varSugElem.innerHTML = vHtml;
+        }
+
+        function updateIdSuggestions() {
+            const datalist = document.getElementById("prodIdSuggestions");
+            if (!datalist) return;
+            datalist.innerHTML = '';
+            const allIds = new Set([...Object.keys(PRODUCTS_MAP), "HUT_MUI_TU_LANH", "TUI_HUT_MUI_GIAY", "TUI_HUT_AM", "TUI_TOA_HUONG", "COMBO_1", "COMBO_2"]);
+            allIds.forEach(id => { datalist.innerHTML += `<option value="${id}">`; });
+        }
+
+        function getFriendlyName(id) {
+            if (PRODUCTS_MAP[id]) return PRODUCTS_MAP[id].name;
+            if (id === 'HUT_MUI_TU_LANH') return 'Hút mùi tủ lạnh';
+            if (id === 'TUI_HUT_MUI_GIAY') return 'Túi hút mùi giày';
+            if (id === 'TUI_HUT_AM') return 'Túi hút ẩm';
+            if (id === 'TUI_TOA_HUONG') return 'Túi tỏa hương';
+            return id;
+        }
+
+        // ==========================================
+        // 2. TAB 1: KHO & MÃ VẠCH (TÍCH HỢP IN MÃ)
+        // ==========================================
+        function updateCounterDropdown() {
+            const select = document.getElementById("stockCounter");
+            const currentVal = select.value;
+            select.innerHTML = '<option value="">-- CHỌN QUẦY ĐỂ XEM & CẬP NHẬT KHO --</option>';
+            CURRENT_COUNTERS.forEach(c => { select.innerHTML += `<option value="${c}">Kho Quầy ${c}</option>`; });
+            if (CURRENT_COUNTERS.includes(currentVal)) select.value = currentVal;
+        }
+
+        window.onCounterChange = function() {
+            const counter = document.getElementById("stockCounter").value;
+            if (counter) {
+                get(ref(db, `kho/${counter}`)).then(snap => { updateAllStocks(snap.val() || {}); });
+            } else {
+                updateAllStocks(null);
+            }
+        };
+
+        function renderMergedTable() {
+            const tbody = document.getElementById("inventoryTableBody");
+            let html = '';
+
+            const sortedCodes = Object.keys(BARCODE_MAP).sort((a, b) => {
+                if (BARCODE_MAP[a].itemType === 'combo' && BARCODE_MAP[b].itemType !== 'combo') return 1;
+                if (BARCODE_MAP[a].itemType !== 'combo' && BARCODE_MAP[b].itemType === 'combo') return -1;
+                return a.localeCompare(b);
+            });
+
+            sortedCodes.forEach(code => {
+                const data = BARCODE_MAP[code];
+                let detailInfo = `ID: ${data.id}`;
+                let pathStr = "";
+                let actionHtml = "";
+                let isCombo = data.itemType === 'combo';
+
+                if (data.itemType === 'variant') {
+                    detailInfo += ` | Phân loại: <b style="color:#2196F3">${data.variant}</b>`;
+                    pathStr = `${data.id}/${data.variant}`;
+                } else if (isCombo) {
+                    let baseStr = data.baseVariant ? `${data.base} (${data.baseVariant})` : data.base;
+                    detailInfo += ` | Gốc: ${baseStr} + ${data.h1} + ${data.h2}`;
+                } else {
+                    pathStr = `${data.id}`;
+                }
+
+                if (!isCombo) {
+                    actionHtml = `
+                        <div class="action-cell">
+                            <input type="number" id="input-${code}" class="inline-input" placeholder="SL" min="0">
+                            <button class="btn-sm btn-sm-primary" title="Nhập thêm hàng mới" onclick="updateKhoInline('ADD', '${pathStr}', '${code}')">➕</button>
+                            <button class="btn-sm btn-sm-warning" title="Điều chỉnh lại tồn thực tế" onclick="updateKhoInline('EDIT', '${pathStr}', '${code}')">✏️</button>
+                        </div>
+                    `;
+                } else {
+                    actionHtml = `<span style="color:#999; font-size:12px; font-style:italic;">(Tự trừ gốc)</span>`;
+                }
+
+                // CỘT 1: CHỈNH SỬA MÃ BẰNG TEXT
+                // CỘT 2: HIỂN THỊ HÌNH ẢNH MÃ VẠCH + NÚT IN
+                html += `
+                    <tr>
+                        <td>
+                            <div style="display:flex; gap:5px; align-items:center;">
+                                <input type="text" id="bc-edit-${code}" class="form-control" style="padding: 6px 8px; font-weight:bold; font-size:14px; border:1px solid #ff9800; color:#e65100; width: 110px; text-align:center;" value="${code}">
+                                <button class="btn-sm btn-sm-success" title="Lưu thay đổi mã vạch" onclick="renameBarcode('${code}')">💾</button>
+                            </div>
+                        </td>
+                        <td style="text-align:center; padding: 10px;">
+                            <svg id="svg-bc-${code}" class="mini-barcode"></svg>
+                            <br>
+                            <button class="btn-sm btn-sm-outline" style="margin-top:2px;" onclick="printSingleBarcode('${code}')">In Mã Barcode</button>
+                        </td>
+                        <td>
+                            <b style="font-size:14px;">${data.name}</b> <br>
+                            <small style="color:#777">${detailInfo}</small>
+                        </td>
+                        <td style="text-align:center;">
+                            <span class="badge badge-danger" id="stock-val-${code}">---</span>
+                        </td>
+                        <td style="text-align:center;">
+                            ${actionHtml}
+                        </td>
+                        <td style="text-align:center;">
+                            <button class="btn-sm btn-sm-danger" title="Xóa mã này" onclick="deleteBarcode('${code}')">🗑️</button>
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            if (!html) html = '<tr><td colspan="6" style="text-align:center; padding: 20px;">Chưa có dữ liệu. Hãy tạo mặt hàng mới!</td></tr>';
+            tbody.innerHTML = html;
+
+            // RENDER HÌNH ẢNH MÃ VẠCH VÀO BẢNG
+            sortedCodes.forEach(code => {
+                try {
+                    const svgElem = document.getElementById(`svg-bc-${code}`);
+                    if (svgElem) {
+                        JsBarcode(svgElem, code, {
+                            format: "CODE128",
+                            width: 1.2,
+                            height: 35,
+                            displayValue: true,
+                            fontSize: 12,
+                            margin: 0
+                        });
+                    }
+                } catch (e) {
+                    console.error("Lỗi vẽ mã vạch:", code);
+                }
+            });
+        }
+
+        // HÀM IN MỘT MÃ VẠCH ĐỘC LẬP
+        window.printSingleBarcode = function(code) {
+            try {
+                JsBarcode("#printSvg", code, {
+                    format: "CODE128",
+                    lineColor: "#000",
+                    width: 2.5,
+                    height: 90,
+                    displayValue: true,
+                    fontSize: 20,
+                    margin: 10
+                });
+                window.print(); // Gọi lệnh in của trình duyệt
+            } catch (e) {
+                showToast("Mã vạch chứa ký tự không được hỗ trợ chuẩn CODE128", "error");
+            }
+        };
+
+        function updateAllStocks(khoData) {
+            for (const [code, data] of Object.entries(BARCODE_MAP)) {
+                const span = document.getElementById(`stock-val-${code}`);
+                if (!span) continue;
+
+                if (!khoData) {
+                    span.innerText = "---";
+                    span.className = 'badge badge-danger';
+                    continue;
+                }
+
+                if (data.itemType === 'combo') {
+                    let baseStock = 0;
+                    if (data.baseVariant) {
+                        baseStock = khoData[data.base]?.[data.baseVariant]?.stock || 0;
+                    } else {
+                        baseStock = khoData[data.base]?.stock || 0;
+                    }
+
+                    let h1Stock = khoData["TUI_TOA_HUONG"]?.[data.h1]?.stock || 0;
+                    let h2Stock = khoData["TUI_TOA_HUONG"]?.[data.h2]?.stock || 0;
+
+                    let maxFlavors = (data.h1 === data.h2) ? Math.floor(h1Stock / 2) : Math.min(h1Stock, h2Stock);
+                    let maxCombo = Math.min(baseStock, maxFlavors);
+                    
+                    span.innerText = `Max: ${maxCombo}`;
+                    span.className = 'badge ' + (maxCombo < 5 ? 'badge-danger' : (maxCombo < 20 ? 'badge-warning' : 'badge-safe'));
+
+                } else {
+                    let stock = 0;
+                    if (data.itemType === 'single') stock = khoData[data.id]?.stock || 0;
+                    else if (data.itemType === 'variant') stock = khoData[data.id]?.[data.variant]?.stock || 0;
+                    
+                    span.innerText = stock;
+                    span.className = 'badge ' + (stock < 10 ? 'badge-danger' : (stock < 50 ? 'badge-warning' : 'badge-safe'));
+                }
+            }
+        }
+
+        window.renameBarcode = function(oldCode) {
+            const input = document.getElementById(`bc-edit-${oldCode}`);
+            const newCode = input.value.trim().toUpperCase();
+
+            if (!newCode) { showToast("Mã vạch không được để trống!", "error"); input.value = oldCode; return; }
+            if (newCode === oldCode) return; 
+
+            if (BARCODE_MAP[newCode]) {
+                showToast(`LỖI: Mã vạch ${newCode} đã tồn tại!`, "error");
+                input.value = oldCode;
+                return;
+            }
+
+            let updates = {};
+            updates[`barcodes/${newCode}`] = BARCODE_MAP[oldCode];
+            updates[`barcodes/${oldCode}`] = null;
+
+            update(ref(db), updates).then(() => {
+                showToast(`✔️ Đã đổi mã ${oldCode} thành ${newCode}`);
+                reloadBarcodes();
+            });
+        };
+
+        window.updateKhoInline = function(actionType, pathStr, barcodeCode) {
+            const counter = document.getElementById("stockCounter").value;
+            if (!counter) { showToast("LỖI: Vui lòng chọn quầy ở phía trên!", "error"); return; }
+
+            const inputElem = document.getElementById(`input-${barcodeCode}`);
+            const qty = parseInt(inputElem.value);
+
+            if (isNaN(qty) || qty < 0) { showToast("Vui lòng nhập số lượng hợp lệ!", "error"); inputElem.focus(); return; }
+
+            const parts = pathStr.split('/');
+            const productId = parts[0];
+            const variantLog = parts[1] || "Không";
+            const stockRef = ref(db, `kho/${counter}/${pathStr}`);
+            const logRef = ref(db, "logs/nhap_kho");
+
+            runTransaction(stockRef, (currentData) => {
+                if (currentData === null) currentData = { stock: 0, daBan: 0, daTang: 0 };
+                if (actionType === 'ADD') currentData.stock = (currentData.stock || 0) + qty;
+                else currentData.stock = qty; 
+                return currentData;
+            }).then((res) => {
+                if (res.committed) {
+                    push(logRef, { action: actionType, kho: counter, product: productId, variant: variantLog, quantity: qty, time: Date.now() });
+                    showToast(`✔️ Đã cập nhật thành công!`);
+                    inputElem.value = ""; 
+                }
+            });
+        };
+
+        window.deleteBarcode = function(code) {
+            if (confirm(`⚠️ NGUY HIỂM: Bạn muốn xóa vĩnh viễn mã vạch [ ${code} ] khỏi hệ thống?`)) {
+                update(ref(db), { [`barcodes/${code}`]: null }).then(() => { 
+                    showToast(`🗑️ Đã xóa mã vạch ${code}`); 
+                    reloadBarcodes(); 
+                });
+            }
+        };
+
+        // ==========================================
+        // 3. TAB 2: MẶT HÀNG & COMBO MỚI
+        // ==========================================
+        window.handleComboBaseChange = function() {
+            const baseSelect = document.getElementById("bcComboBase").value;
+            document.getElementById("comboBaseVariantGroup").style.display = baseSelect === "TUI_HUT_AM" ? "block" : "none";
+        };
+
+        window.handleComboTypeChange = function() {
+            const cType = document.getElementById("bcComboType").value;
+            const baseSelect = document.getElementById("bcComboBase");
+            
+            if (cType === "COMBO_1") { baseSelect.value = "HUT_MUI_TU_LANH"; baseSelect.disabled = true; } 
+            else if (cType === "COMBO_2") { baseSelect.value = "TUI_HUT_MUI_GIAY"; baseSelect.disabled = true; } 
+            else { baseSelect.disabled = false; }
+            handleComboBaseChange();
+        };
+
+        window.addNewProduct = function() {
+            const id = document.getElementById("newProdId").value.trim().toUpperCase();
+            const name = document.getElementById("newProdName").value.trim();
+            const type = document.getElementById("newProdType").value;
+            const variantsStr = document.getElementById("newProdVariants").value.trim();
+            const barcodeInput = document.getElementById("newProdBarcode").value.trim().toUpperCase();
+
+            if (!id || !name) { showToast("Vui lòng điền đủ Tên và Mã hệ thống!", "error"); return; }
+
+            let isExisting = false;
+            if (PRODUCTS_MAP[id] || ['TUI_HUT_AM', 'TUI_TOA_HUONG', 'HUT_MUI_TU_LANH', 'TUI_HUT_MUI_GIAY'].includes(id)) isExisting = true;
+
+            let updates = {};
+            if (!isExisting) updates[`products/${id}`] = { name: name, type: type };
+
+            const variants = (type === 'variant' && variantsStr) ? variantsStr.split(',').map(v => v.trim().replace(/\./g, '_')).filter(v => v) : [];
+
+            if (type === 'variant' && variants.length > 0) {
+                variants.forEach((v) => {
+                    let bcCode = barcodeInput ? (variants.length === 1 ? barcodeInput : `${barcodeInput}_${v.toUpperCase()}`) : `AUTO_${id}_${v.toUpperCase()}`;
+                    updates[`barcodes/${bcCode}`] = { id: id, itemType: 'variant', name: `${name} (${v.replace(/_/g, ' ')})`, variant: v };
+                });
+            } else if (!isExisting && type === 'single') {
+                let bcCode = barcodeInput || `AUTO_${id}`;
+                updates[`barcodes/${bcCode}`] = { id: id, itemType: 'single', name: name };
+            }
+
+            CURRENT_COUNTERS.forEach(c => {
+                if (type === 'variant' && variants.length > 0) {
+                    variants.forEach(v => { updates[`kho/${c}/${id}/${v}`] = { stock: 0, daBan: 0, daTang: 0 }; });
+                } else if (!isExisting && type === 'single') {
+                    updates[`kho/${c}/${id}`] = { stock: 0, daBan: 0, daTang: 0 };
+                }
+            });
+
+            if (Object.keys(updates).length > 0) {
+                update(ref(db), updates).then(() => {
+                    showToast(isExisting ? `✔️ Đã bổ sung phân loại` : `✔️ Đã thêm hàng mới`);
+                    document.getElementById("newProdId").value = ""; document.getElementById("newProdName").value = "";
+                    document.getElementById("newProdVariants").value = ""; document.getElementById("newProdBarcode").value = "";
+                    document.getElementById("newProdName").disabled = false; document.getElementById("newProdType").disabled = false;
+                    reloadBarcodes();
+                });
+            } else {
+                showToast("Vui lòng nhập Phân loại muốn thêm!", "warning");
+            }
+        };
+
+        window.addComboBarcode = function() {
+            const code = document.getElementById("cbCode").value.trim().toUpperCase();
+            const name = document.getElementById("cbName").value.trim();
+            const cType = document.getElementById("bcComboType").value;
+            const id = (cType === "COMBO_1" || cType === "COMBO_2") ? cType : "COMBO_CUSTOM";
+            const base = document.getElementById("bcComboBase").value;
+            const baseVar = base === "TUI_HUT_AM" ? document.getElementById("bcComboBaseVariant").value : null;
+            const h1 = document.getElementById("bcComboH1").value;
+            const h2 = document.getElementById("bcComboH2").value;
+
+            if (!code || !name) { showToast("Mã vạch và Tên không được để trống!", "error"); return; }
+            if (BARCODE_MAP[code]) { showToast("Mã vạch đã tồn tại!", "error"); return; }
+
+            let newData = { itemType: 'combo', id: id, name: name, base: base, h1: h1, h2: h2 };
+            if (baseVar) newData.baseVariant = baseVar;
+
+            update(ref(db, `barcodes/${code}`), newData).then(() => {
+                showToast(`✔️ Đã tạo mã Combo ${code}`);
+                document.getElementById("cbCode").value = "";
+                document.getElementById("cbName").value = "";
+                reloadBarcodes();
+            });
+        };
+
+        // ==========================================
+        // 4. TAB 3: QUẢN LÝ QUẦY & RESET
+        // ==========================================
+        function renderCounterList() {
+            const list = document.getElementById("counterList");
+            list.innerHTML = "";
+            if (CURRENT_COUNTERS.length === 0) return;
+
+            CURRENT_COUNTERS.forEach(c => {
+                list.innerHTML += `
+                    <div class="barcode-item" style="display: flex; justify-content: space-between; align-items: center;">
+                        <b style="font-size: 16px; color: #e65100;">Quầy ${c}</b>
+                        <div style="display: flex; gap: 5px;">
+                            <button class="btn-sm btn-sm-warning" onclick="renameCounter('${c}')">✏️ Đổi Tên</button>
+                            <button class="btn-sm btn-sm-danger" onclick="deleteCounter('${c}')">🗑️ Xóa</button>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        window.addCounter = function() {
+            let name = document.getElementById("newCounterName").value.trim().toUpperCase();
+            if (!name) return;
+            if (CURRENT_COUNTERS.includes(name)) { showToast("Quầy đã tồn tại!", "error"); return; }
+            update(ref(db, `kho/${name}`), { "HUT_MUI_TU_LANH": { stock: 0, daBan: 0, daTang: 0 } }).then(() => {
+                showToast(`✔️ Đã thêm quầy ${name}`); document.getElementById("newCounterName").value = "";
+            });
+        };
+
+        window.renameCounter = function(oldName) {
+            let newName = prompt(`Nhập TÊN MỚI để đổi cho Quầy ${oldName}:`, oldName);
+            if (!newName) return;
+            newName = newName.trim().toUpperCase();
+            if (newName === oldName) return;
+            if (CURRENT_COUNTERS.includes(newName)) { showToast("LỖI: Tên quầy mới đã tồn tại!", "error"); return; }
+
+            get(ref(db, `kho/${oldName}`)).then(snap => {
+                let updates = {};
+                updates[`kho/${newName}`] = snap.val() || { "HUT_MUI_TU_LANH": { stock: 0, daBan: 0, daTang: 0 } };
+                updates[`kho/${oldName}`] = null;
+                update(ref(db), updates).then(() => { showToast(`✔️ Đã đổi tên thành ${newName}`); });
+            });
+        };
+
+        window.deleteCounter = function(name) {
+            if (confirm(`⚠️ NGUY HIỂM: Xóa TOÀN BỘ tồn kho của Quầy ${name}?`)) {
+                update(ref(db), { [`kho/${name}`]: null }).then(() => { showToast(`🗑️ Đã xóa quầy ${name}`); });
+            }
+        };
+
+        window.resetAllCountersStats = function() {
+            if (!confirm(`⚠️ BẠN CÓ CHẮC CHẮN MUỐN RESET?\n\nToàn bộ [Đã Bán] và [Đã Tặng] của TẤT CẢ CÁC QUẦY sẽ về 0.\n(Tồn kho thực tế vẫn giữ nguyên)`)) return;
+
+            get(ref(db, `kho`)).then(snap => {
+                if (!snap.exists()) return;
+                let khoData = snap.val();
+                let updates = {};
+                
+                for (let counter in khoData) {
+                    for (let prodId in khoData[counter]) {
+                        let itemData = khoData[counter][prodId];
+                        if (itemData.stock !== undefined) {
+                            updates[`kho/${counter}/${prodId}/daBan`] = 0;
+                            updates[`kho/${counter}/${prodId}/daTang`] = 0;
+                        } else {
+                            for (let variant in itemData) {
+                                if (typeof itemData[variant] === 'object') {
+                                    updates[`kho/${counter}/${prodId}/${variant}/daBan`] = 0;
+                                    updates[`kho/${counter}/${prodId}/${variant}/daTang`] = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (Object.keys(updates).length > 0) {
+                    update(ref(db), updates).then(() => { showToast(`✔️ Đã reset thống kê TẤT CẢ các quầy về 0`); });
+                }
+            });
+        };
+
+        window.clearAllLogs = function() {
+            if (!confirm(`⚠️ ĐẶC BIỆT NGUY HIỂM:\n\nHành động này sẽ XÓA SẠCH TOÀN BỘ lịch sử Nhập kho, Bán, và Tặng trên hệ thống.\n\nSau khi xóa, Google Sheet sẽ bắt đầu ghi nhận lại từ 1 bảng trắng. Bạn có chắc chắn muốn xóa không?`)) return;
+
+            set(ref(db, 'logs'), null).then(() => {
+                showToast(`🗑️ Đã dọn sạch toàn bộ lịch sử Logs!`);
+            }).catch(err => {
+                showToast(`LỖI: ${err.message}`, "error");
+            });
+        };
+
+        function showToast(msg, type = 'success') {
+            const toast = document.getElementById("toast");
+            toast.innerText = msg; toast.style.background = type === 'success' ? '#4caf50' : '#f44336';
+            toast.classList.add("show"); setTimeout(() => toast.classList.remove("show"), 3000);
+        }
+    </script>
+
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background: #f4f6f9; padding: 20px; display: flex; justify-content: center; }
+        .container { background: #fff; width: 100%; max-width: 1050px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.08); overflow: hidden; }
+        .header { background: #ff9800; color: white; padding: 20px; text-align: center; }
+        .header h2 { margin-bottom: 5px; font-weight: 900; letter-spacing: 1px; }
+        .header p { font-size: 14px; opacity: 0.9; }
+        
+        .tabs { display: flex; background: #fff8eb; border-bottom: 2px solid #ffe0b2; overflow-x: auto; white-space: nowrap;}
+        .tab-btn { flex: 1; padding: 15px 10px; border: none; background: none; cursor: pointer; font-weight: bold; font-size: 14px; color: #777; transition: 0.3s; }
+        .tab-btn.active { color: #e65100; border-bottom: 3px solid #ff9800; background: #fff; }
+        .tab-content { display: none; padding: 25px; }
+        .tab-content.active { display: block; animation: fadeIn 0.4s; }
+        
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; font-size: 13px; font-weight: bold; color: #555; margin-bottom: 5px; text-transform: uppercase; }
+        .form-control { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; outline: none; transition: border 0.3s; }
+        .form-control:focus { border-color: #ff9800; }
+        .form-control:disabled { background-color: #e9ecef; color: #666; cursor: not-allowed; }
+        
+        .combo-box { background: #fff3e0; padding: 15px; border-radius: 8px; border: 1px dashed #ff9800; margin-bottom: 15px; }
+        .combo-box-title { font-size: 12px; font-weight: bold; color: #e65100; margin-bottom: 10px; display: block; text-transform: uppercase;}
+        
+        .btn { padding: 14px; border: none; border-radius: 8px; font-weight: bold; font-size: 14px; cursor: pointer; color: white; transition: 0.2s; text-transform: uppercase;}
+        .btn-primary { background: #2196F3; } .btn-primary:hover { background: #1976D2; }
+        .btn-success { background: #4CAF50; } .btn-success:hover { background: #388E3C; }
+        .btn-warning { background: #ff9800; } .btn-warning:hover { background: #f57c00; }
+        .btn-danger { background: #F44336; } .btn-danger:hover { background: #D32F2F; }
+        .btn-outline { background: #eee; color: #333; border: 1px solid #ddd; } .btn-outline:hover { background: #ddd; }
+        .btn:active { transform: scale(0.97); }
+        
+        .table-container { overflow-x: auto; border-radius: 8px; border: 1px solid #ddd; max-height: 550px; overflow-y: auto;}
+        .table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }
+        .table th, .table td { padding: 12px 10px; border-bottom: 1px solid #eee; vertical-align: middle; }
+        .table th { background: #fdfdfd; color: #555; text-transform: uppercase; font-size: 12px; position: sticky; top: 0; z-index: 1; border-bottom: 2px solid #ddd;}
+        .table tr:hover { background: #fff8eb; }
+        
+        .badge { display: inline-block; padding: 6px 12px; border-radius: 6px; font-size: 14px; font-weight: bold; min-width: 45px; text-align: center;}
+        .badge-safe { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+        .badge-warning { background: #fff8e1; color: #f57f17; border: 1px solid #ffecb3; }
+        .badge-danger { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
+
+        .action-cell { display: flex; gap: 5px; justify-content: center; }
+        .inline-input { width: 60px; padding: 8px 5px; border: 1px solid #ccc; border-radius: 6px; font-weight: bold; text-align: center; outline: none; transition: 0.2s;}
+        .inline-input:focus { border-color: #ff9800; box-shadow: 0 0 5px rgba(255,152,0,0.3); }
+        
+        .btn-sm { padding: 8px 10px; font-size: 12px; border: none; border-radius: 6px; cursor: pointer; color: white; font-weight: bold; transition: 0.2s; white-space: nowrap;}
+        .btn-sm-primary { background: #2196F3; } .btn-sm-primary:hover { background: #1976D2; }
+        .btn-sm-success { background: #4CAF50; } .btn-sm-success:hover { background: #388E3C; }
+        .btn-sm-warning { background: #ff9800; } .btn-sm-warning:hover { background: #f57c00; }
+        .btn-sm-danger { background: #F44336; } .btn-sm-danger:hover { background: #D32F2F; }
+        .btn-sm-outline { background: #fff; color: #333; border: 1px solid #ccc;} .btn-sm-outline:hover { background: #f0f0f0; }
+        .btn-sm:active { transform: scale(0.95); }
+
+        .barcode-item { padding: 12px 15px; border-bottom: 1px solid #eee; transition: 0.2s; }
+        .barcode-item:last-child { border-bottom: none; }
+        .mini-barcode { max-width: 160px; max-height: 40px; }
+
+        #toast { visibility: hidden; min-width: 250px; background-color: #333; color: #fff; text-align: center; border-radius: 8px; padding: 15px; position: fixed; z-index: 1000; left: 50%; bottom: 30px; transform: translateX(-50%); font-weight: bold; box-shadow: 0 5px 15px rgba(0,0,0,0.2); transition: 0.3s; opacity: 0;}
+        #toast.show { visibility: visible; bottom: 50px; opacity: 1; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* KHU VỰC IN MÃ VẠCH ẨN */
+        #printArea { display: none; }
+
+        @media print {
+            body * { visibility: hidden; }
+            #printArea, #printArea * { visibility: visible; }
+            #printArea { 
+                position: absolute; 
+                left: 50%; 
+                top: 50%; 
+                transform: translate(-50%, -50%); 
+                display: flex !important; 
+                justify-content: center; 
+                align-items: center; 
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <h2>HUSTMEN</h2>
+            <p>Bảng Điều Khiển Hàng Hóa Và Tồn Kho Sự Kiện</p>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="tab-stock">KHO VÀ MÃ VẠCH</button>
+            <button class="tab-btn" data-tab="tab-product">THÊM HÀNG</button>
+            <button class="tab-btn" data-tab="tab-counter">TẠO QUẦY VÀ RESET</button>
+        </div>
+
+        <div id="tab-stock" class="tab-content active">
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <select id="stockCounter" class="form-control" style="margin-bottom:0;" onchange="onCounterChange()">
+                    <option value="">-- Đang tải Quầy từ Firebase... --</option>
+                </select>
+                <button class="btn btn-primary" onclick="reloadBarcodes()" style="flex: 0 0 50px;" title="Tải lại bảng">🔄</button>
+            </div>
+
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Mã Barcode (Sửa)</th>
+                            <th style="text-align:center;">Hình Mã Vạch</th>
+                            <th>Sản phẩm / Thông tin</th>
+                            <th style="text-align:center;">Tồn kho</th>
+                            <th style="text-align:center;">Thao tác Kho</th>
+                            <th style="text-align:center;">Xóa</th>
+                        </tr>
+                    </thead>
+                    <tbody id="inventoryTableBody">
+                        <tr><td colspan="6" style="text-align:center; padding: 20px;">Đang tải dữ liệu...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p style="font-size:12px; color:#888; margin-top:10px; text-align:right;">
+                <i>* <b>Mã Barcode</b>: Sửa chữ và bấm 💾. | <b>Kho</b>: Bấm ➕ (Nhập thêm) hoặc ✏️ (Ghi đè số thực tế).</i>
+            </p>
+        </div>
+
+        <div id="tab-product" class="tab-content">
+            
+            <div style="background: #fafafa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 25px;">
+                <h3 style="color:#2196F3; margin-bottom: 15px; font-size: 16px;">TẠO HÀNG HÓA HOẶC PHÂN LOẠI MỚI</h3>
+                
+                <div class="form-group">
+                    <label>Mã Hệ Thống / ID (Gõ tên để tìm hàng cũ hoặc thêm hàng mới)</label>
+                    <input type="text" id="newProdId" class="form-control" list="prodIdSuggestions" placeholder="VD: TUI_HUT_AM ( KHÔNG GHI DẤU VÀ KHOẢNG TRẮNG ĐỂ DẤU _ ) " autocomplete="off">
+                    <datalist id="prodIdSuggestions"></datalist>
+                </div>
+                <div class="form-group">
+                    <label>Tên Mặt Hàng</label>
+                    <input type="text" id="newProdName" class="form-control" placeholder="VD: TÚI HÚT ẨM">
+                </div>
+                <div class="form-group">
+                    <label>Loại Hàng</label>
+                    <select id="newProdType" class="form-control" onchange="document.getElementById('newProdVariantGroup').style.display = this.value === 'variant' ? 'block' : 'none'">
+                        <option value="single">Hàng lẻ (Không phân loại)</option>
+                        <option value="variant">Có phân loại (Nhiều size/mùi)</option>
+                    </select>
+                </div>
+                <div class="form-group" id="newProdVariantGroup" style="display: none;">
+                    <label>Các Phân Loại Cần Thêm (Cách nhau dấu phẩy)</label>
+                    <input type="text" id="newProdVariants" class="form-control" list="variantSuggestions" placeholder="VD: , ...g, Bưởi, ...">
+                    <datalist id="variantSuggestions"></datalist>
+                </div>
+                <div class="form-group">
+                    <label>Mã Vạch Cứng (Để trống hệ thống tự sinh mã AUTO_...)</label>
+                    <input type="text" id="newProdBarcode" class="form-control" placeholder=" Tít mã in trên tem vào đây ">
+                </div>
+                
+                <button class="btn btn-primary" style="width: 100%; margin-top: 5px;" onclick="addNewProduct()">THÊM MẶT HÀNG / PHÂN LOẠI</button>
+                <p id="addProdNotice" style="font-size: 12px; color: #777; margin-top: 10px; text-align:center;"><i>* Sau khi thêm, dữ liệu sẽ tự động xuất hiện ở Tab Kho.</i></p>
+            </div>
+
+            <div class="combo-box">
+                <span class="combo-box-title" style="font-size: 16px;">TẠO MÃ VẠCH XUẤT GÓI COMBO</span>
+                
+                <div style="display: flex; gap: 10px;">
+                    <div class="form-group" style="flex: 1;">
+                        <label>Mã Vạch Combo (In trên hộp)</label>
+                        <input type="text" id="cbCode" class="form-control" placeholder="VD: CB-TET-2027">
+                    </div>
+                    <div class="form-group" style="flex: 2;">
+                        <label>Tên Hiển Thị (Khi quét)</label>
+                        <input type="text" id="cbName" class="form-control" placeholder="VD: Combo ... (Giày + 2 Cà Phê)">
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                    <div class="form-group" style="flex: 1.5; margin-bottom: 0;">
+                        <label>Chuẩn Combo</label>
+                        <select id="bcComboType" class="form-control" onchange="handleComboTypeChange()">
+                            <option value="COMBO_1">Combo 1 (Tủ Lạnh)</option>
+                            <option value="COMBO_2">Combo 2 (Giày)</option>
+                            <option value="CUSTOM">Tùy chỉnh</option>
+                        </select>
+                    </div>
+                    <div class="form-group" style="flex: 2; margin-bottom: 0;">
+                        <label>Sản Phẩm Gốc</label>
+                        <select id="bcComboBase" class="form-control" disabled onchange="handleComboBaseChange()">
+                            <option value="HUT_MUI_TU_LANH">Hút mùi tủ lạnh</option>
+                            <option value="TUI_HUT_MUI_GIAY">Túi hút mùi giày</option>
+                            <option value="TUI_HUT_AM">Túi hút ẩm</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="comboBaseVariantGroup" style="display: none; flex: 1.5; margin-bottom: 0;">
+                        <label>Size / Loại Gốc</label>
+                        <select id="bcComboBaseVariant" class="form-control"></select>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 10px;">
+                    <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                        <label>Túi Hương 1</label>
+                        <select id="bcComboH1" class="form-control"></select>
+                    </div>
+                    <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                        <label>Túi Hương 2</label>
+                        <select id="bcComboH2" class="form-control"></select>
+                    </div>
+                </div>
+
+                <button class="btn btn-warning" style="width: 100%; margin-top: 15px;" onclick="addComboBarcode()">TẠO MÃ COMBO</button>
+            </div>
+        </div>
+
+        <div id="tab-counter" class="tab-content">
+            
+            <div style="background: #ffebee; padding: 15px; border-radius: 8px; border: 1px dashed #f44336; margin-bottom: 20px;">
+                <h3 style="color:#c62828; margin-bottom: 12px; font-size: 18px; text-align: center;">RESET HỆ THỐNG</h3>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-warning" onclick="resetAllCountersStats()" style="flex:1;">RESET BÁN/TẶNG VỀ 0</button>
+                    <button class="btn btn-danger" onclick="clearAllLogs()" style="flex:1;">XÓA SẠCH LỊCH SỬ LOGS</button>
+                </div>
+                <p style="font-size:12px; color:#c62828; margin-top:10px;"><i>* Sử dụng khi bắt đầu sự kiện/đợt bán hàng mới. Xóa Logs sẽ làm trống dữ liệu đẩy về Google Sheet (Chỉ giữ lại tồn kho hiện tại).</i></p>
+            </div>
+
+            <div style="background: #fafafa; padding: 15px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 15px;">
+                <div class="form-group" style="margin-bottom:0;">
+                    <label>THÊM QUẦY KHO MỚI</label>
+                    <div style="display: flex; gap: 10px;">
+                        <input type="text" id="newCounterName" class="form-control" placeholder="Nhập tên quầy">
+                        <button class="btn btn-primary" onclick="addCounter()" style="flex: 0 0 120px; padding: 0;">➕ THÊM</button>
+                    </div>
+                </div>
+            </div>
+
+            <label style="font-size: 13px; font-weight: bold; color: #555; display: block; margin-top: 25px;">DANH SÁCH QUẦY HIỆN TẠI</label>
+            <div id="counterList" class="barcode-list"></div>
+        </div>
+
+    </div>
+
+    <div id="printArea">
+        <svg id="printSvg"></svg>
+    </div>
+
+    <div id="toast">Thông báo hệ thống</div>
+
+</body>
+</html>
